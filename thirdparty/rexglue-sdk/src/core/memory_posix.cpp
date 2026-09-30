@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdio>
@@ -231,6 +232,25 @@ void ShadowForget(void* base_address, size_t length) {
   }
 }
 
+// True when [begin, end) is described end to end by the shadow, i.e. it lies
+// wholly inside mappings this module created and has not released.
+bool ShadowCoversRange(uintptr_t begin, uintptr_t end) {
+  std::shared_lock<std::shared_mutex> lock(g_prot_shadow_mutex);
+  auto it = g_prot_shadow.upper_bound(begin);
+  if (it == g_prot_shadow.begin()) {
+    return false;
+  }
+  --it;
+  uintptr_t cursor = begin;
+  for (; it != g_prot_shadow.end() && it->first <= cursor; ++it) {
+    cursor = std::max(cursor, it->second.end);
+    if (cursor >= end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Returns false if the address is not tracked, leaving the caller to fall back.
 bool ShadowLookup(void* address, PageAccess& access_out, uintptr_t& range_end_out) {
   const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
@@ -360,6 +380,22 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
     default:
       prot_initial = static_cast<int>(prot_requested);
       break;
+  }
+
+  // Committing inside a mapping this module already made is only an mprotect.
+  // The guest heaps do exactly that on every allocation (their views are mapped
+  // up front), so answer it from the shadow: the general path below would
+  // first issue an mmap that is certain to fail with EEXIST and then parse
+  // /proc/self/maps to confirm the range, per guest allocation. If mprotect
+  // disagrees with the shadow, fall through to that path unchanged.
+  if (base_address && (allocation_type == AllocationType::kCommit ||
+                       allocation_type == AllocationType::kReserveCommit)) {
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(base_address);
+    if (ShadowCoversRange(begin, begin + length) &&
+        mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
+      ShadowRecord(base_address, length, access);
+      return base_address;
+    }
   }
 
   // Build flags - always use MAP_FIXED_NOREPLACE for fixed addresses
@@ -589,11 +625,20 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length, P
     return nullptr;
   }
 
+  // The guest memory views are mapped here, over any reservation, so record
+  // them: otherwise the shadow keeps describing whatever was replaced (or
+  // nothing), and every guest address the heaps have not yet re-protected
+  // falls back to parsing /proc/self/maps.
+  ShadowRecord(result, length, access);
   return result;
 }
 
 bool UnmapFileView(FileMappingHandle handle, void* base_address, size_t length) {
-  return munmap(base_address, length) == 0;
+  if (munmap(base_address, length) != 0) {
+    return false;
+  }
+  ShadowForget(base_address, length);
+  return true;
 }
 
 }  // namespace memory
