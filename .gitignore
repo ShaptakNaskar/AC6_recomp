@@ -5,8 +5,9 @@ bin/
 # Generated recomp code
 generated/
 
-# Game assets (user-supplied)
+# Game assets (user-supplied): a folder, or a symlink to one (setup_and_build.sh)
 assets/
+/assets
 *.xex
 *.iso
 *.god

@@ -44,9 +44,9 @@ See [Important console variables](#important-console-variables).
 
 | | |
 |---|---|
-| **OS** | Windows 10 or 11, 64-bit |
+| **OS** | Windows 10 or 11, 64-bit, or 64-bit Linux (see [Linux](#linux)) |
 | **CPU** | **Must support AVX2** — Intel 4th-gen Core (2013) or newer, AMD Zen (2017) or newer. |
-| **GPU** | Direct3D 12 capable |
+| **GPU** | Direct3D 12 capable (Windows), Vulkan capable (Linux) |
 | **Game data** | Your own legally obtained copy of Ace Combat 6 (US region only! Europe and Japan is not supported) |
 
 *Note that the system requirement does not guarantees that the recomp will perform well on your system!*
@@ -181,6 +181,31 @@ cmake --build --preset win-amd64-relwithdebinfo
 The executable is placed at `out/build/win-amd64-relwithdebinfo/ac6recomp.exe`.
 
 On Windows, use the preset commands above rather than plain `cmake -L` in the repo root. If you previously configured from an `x86` Visual Studio prompt or with the wrong compiler on `PATH`, delete `out/build/win-amd64-relwithdebinfo` and re-run the preset from a normal 64-bit PowerShell/CMD window or an x64 Native Tools prompt.
+
+### Linux
+
+The Linux build uses the Vulkan renderer. You need Clang 18 or newer, CMake 3.25+, Ninja, pkg-config, the GTK 3 and X11-XCB development files, and a Vulkan driver. Install the PipeWire, PulseAudio or ALSA development files too: the bundled SDL picks its audio backends when you configure, and builds without sound if it finds none.
+
+| Distribution | Build dependencies |
+|---|---|
+| Arch, CachyOS | `sudo pacman -S --needed clang cmake ninja pkgconf gtk3 libx11 alsa-lib libpulse pipewire` |
+| Ubuntu 24.04+ | `sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libx11-xcb-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev` |
+| Fedora | `sudo dnf install clang cmake ninja-build pkgconf-pkg-config gtk3-devel libX11-devel alsa-lib-devel pulseaudio-libs-devel pipewire-devel systemd-devel` |
+
+**Build.** Point the script at your extracted game folder (the one holding `default.xex`), or put the `.iso` in the repository root and install [extract-xiso](https://github.com/XboxDev/extract-xiso):
+
+```bash
+./setup_and_build.sh /path/to/extracted/game
+```
+
+The manual equivalent is the four commands from Option B with the `linux-amd64-relwithdebinfo` preset.
+
+**Run.** Start `out/build/linux-amd64-relwithdebinfo/ac6recomp`. The script links your game files in as `assets/` next to the executable; alternatively pass the game folder as the first argument. Raw DLC packages go in a `dlc/` folder next to the executable, or pass `--dlc_dir=/path/to/dlc`. Any setting can be given on the command line the same way (`--name=value`).
+
+- Saves live in `~/.local/share/ac6recomp`. The pipeline cache is written to `cache/` in the working directory, so start the game from the same folder each time.
+- On Wayland the window opens through XWayland automatically.
+- On laptops with two GPUs, if the wrong one is picked, choose it with `--vulkan_device=N`, where `N` is its position in `vulkaninfo --summary` (counting from 0).
+- Not yet available on Linux: keyboard and mouse controls, and texture replacement.
 
 ---
 
