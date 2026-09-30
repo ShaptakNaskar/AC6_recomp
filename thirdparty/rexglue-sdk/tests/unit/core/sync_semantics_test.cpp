@@ -170,6 +170,60 @@ TEST_CASE("SignalAndWait does not lose a wakeup to the release window", "[sync]"
 }
 
 // ---------------------------------------------------------------------------
+// AC6's per-frame main/worker handshake must never stall
+// ---------------------------------------------------------------------------
+//
+// The guest's condition variable in full (rex_sub_82345C88 / 82345CE0): a
+// mutex, an auto-reset event and a counter. The setter takes the mutex, stores
+// the counter, releases the mutex and sets the event. The waiter takes the
+// mutex and, while the counter is not its value, releases the mutex and waits
+// on the event in one alertable SignalAndWait, then retakes the mutex. The main
+// thread and a worker ping-pong through it every frame. On Windows each Set
+// reaches the thread already waiting; if a waiter is ever out of the queue at
+// that moment - between alertable polling slices, or between releasing the
+// mutex and joining the queue - the setter's own wait, one call later, takes
+// the release instead and both threads then wait forever.
+TEST_CASE("mutex and auto-reset event handshake never stalls", "[sync]") {
+  constexpr int kRounds = 5000;
+  auto mutex = rex::thread::Mutant::Create(false);
+  auto event = Event::CreateAutoResetEvent(false);
+  uint64_t counter = 1;  // Guarded by mutex.
+  std::atomic<bool> stalled{false};
+
+  auto set_value = [&](uint64_t value) {
+    REQUIRE(rex::thread::Wait(mutex.get(), false, kGenerous) == WaitResult::kSuccess);
+    counter = value;
+    mutex->Release();
+    event->Set();
+  };
+  auto wait_value = [&](uint64_t value) {
+    REQUIRE(rex::thread::Wait(mutex.get(), false, kGenerous) == WaitResult::kSuccess);
+    while (counter != value) {
+      auto result = rex::thread::SignalAndWait(mutex.get(), event.get(), true, kGenerous);
+      if (result != WaitResult::kSuccess && result != WaitResult::kUserCallback) {
+        stalled = true;  // Timed out on a condition the other side satisfied.
+        return;
+      }
+      REQUIRE(rex::thread::Wait(mutex.get(), false, kGenerous) == WaitResult::kSuccess);
+    }
+    mutex->Release();
+  };
+
+  std::thread worker([&] {
+    for (int round = 0; round < kRounds && !stalled; ++round) {
+      wait_value(1);
+      set_value(0);
+    }
+  });
+  for (int round = 0; round < kRounds && !stalled; ++round) {
+    wait_value(0);
+    set_value(1);
+  }
+  worker.join();
+  REQUIRE_FALSE(stalled.load());
+}
+
+// ---------------------------------------------------------------------------
 // Regression guards for the rewrite - these should pass before and after
 // ---------------------------------------------------------------------------
 
