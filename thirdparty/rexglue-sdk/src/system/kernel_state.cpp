@@ -849,7 +849,14 @@ void KernelState::CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result,
   XOverlappedSetResult(ptr, result);
   XOverlappedSetExtendedError(ptr, extended_error);
   XOverlappedSetLength(ptr, length);
-  X_HANDLE event_handle = XOverlappedGetEvent(ptr);
+  // Read everything else still needed from the XOVERLAPPED before setting the
+  // event: the thread waiting on it may free or reuse the structure the moment
+  // it is released, and a completion routine read after that is whatever the
+  // title put there next - queued as an APC to a garbage address (0xFEFEFEFE
+  // in practice, which DeliverAPCs then refuses).
+  const X_HANDLE event_handle = XOverlappedGetEvent(ptr);
+  const uint32_t completion_routine = XOverlappedGetCompletionRoutine(ptr);
+  const X_HANDLE thread_handle = completion_routine ? XOverlappedGetContext(ptr) : 0;
   if (event_handle) {
     auto ev = object_table()->LookupObject<XEvent>(event_handle);
     if (!ev) {
@@ -859,13 +866,11 @@ void KernelState::CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result,
       ev->Set(0, false);
     }
   }
-  if (XOverlappedGetCompletionRoutine(ptr)) {
-    X_HANDLE thread_handle = XOverlappedGetContext(ptr);
+  if (completion_routine) {
     auto thread = object_table()->LookupObject<XThread>(thread_handle);
     if (thread) {
       // Queue APC on the thread that requested the overlapped operation.
-      uint32_t routine = XOverlappedGetCompletionRoutine(ptr);
-      thread->EnqueueApc(routine, result, length, overlapped_ptr);
+      thread->EnqueueApc(completion_routine, result, length, overlapped_ptr);
     }
   }
 }
