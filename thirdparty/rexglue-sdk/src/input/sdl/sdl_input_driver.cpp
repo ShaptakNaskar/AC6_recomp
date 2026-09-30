@@ -47,12 +47,14 @@ void WarnOrphanEvent(const char* handler, SDL_JoystickID instance_id) {
 // so try next to the executable first - that is where the file ships - and fall
 // back to the CWD. Returns an empty string when neither candidate exists.
 std::string ResolveMappingsPath(const std::string& configured) {
-  const std::filesystem::path configured_path(configured);
+  // to_path: the cvar string is UTF-8, not the ANSI codepage a bare path
+  // construction would assume on Windows.
+  const std::filesystem::path configured_path = rex::to_path(configured);
+  std::error_code ec;
   if (configured_path.is_absolute()) {
-    return std::filesystem::exists(configured_path) ? configured : std::string();
+    return std::filesystem::exists(configured_path, ec) ? configured : std::string();
   }
 
-  std::error_code ec;
   const auto next_to_exe = rex::filesystem::GetExecutableFolder() / configured_path;
   if (std::filesystem::exists(next_to_exe, ec)) {
     return rex::path_to_utf8(next_to_exe);
