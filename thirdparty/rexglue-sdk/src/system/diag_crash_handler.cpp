@@ -724,7 +724,8 @@ namespace rex::diag::crash {
 
 namespace {
 
-constexpr uint32_t kGuestVirtualBase = 0x100000000u;
+// Size of the guest's 32-bit virtual view; the physical view follows it.
+constexpr uint64_t kGuestVirtualSpan = 0x100000000ull;
 constexpr int kMaxGuestFrames = 32;
 
 std::atomic<uintptr_t> g_guest_base{0};
@@ -764,9 +765,19 @@ void ReportGuestState(uint64_t fault_address, uint64_t host_pc, bool is_write) {
     return;
   }
 
-  if (fault_address >= kGuestVirtualBase) {
-    REXLOG_ERROR("[FAULT] guest {} of {:#010x}; host pc {:#x}", is_write ? "write" : "read",
-                 uint32_t(fault_address - kGuestVirtualBase), host_pc);
+  // Translate against the base the runtime actually mapped guest memory at
+  // (SetGuestMemoryBounds), not an assumed one: a fault outside those views is
+  // in host memory and has no guest address to report.
+  const uint64_t guest_base = g_guest_base.load(std::memory_order_relaxed);
+  const uint64_t guest_extent = g_guest_extent.load(std::memory_order_relaxed);
+  if (guest_base && fault_address >= guest_base && fault_address - guest_base < guest_extent) {
+    const uint64_t offset = fault_address - guest_base;
+    REXLOG_ERROR("[FAULT] guest {} of {} {:#010x}; host pc {:#x}", is_write ? "write" : "read",
+                 offset < kGuestVirtualSpan ? "virtual" : "physical",
+                 uint32_t(offset % kGuestVirtualSpan), host_pc);
+  } else {
+    REXLOG_ERROR("[FAULT] host {} of {:#x} (outside guest memory); host pc {:#x}",
+                 is_write ? "write" : "read", fault_address, host_pc);
   }
 
   // The guest call chain. Each frame's saved lr is the return address into its
