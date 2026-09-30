@@ -35,7 +35,6 @@
 #endif
 #include <windows.h>
 #else
-#include <sys/mman.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #endif
@@ -53,6 +52,7 @@
 #include <native/ui/presenter.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/memory/utils.h>
 #include <rex/system/xmemory.h>
 
 #include "../render_hooks.h"
@@ -288,10 +288,22 @@ bool MakeHostWritable(void* p, size_t bytes) noexcept {
   DWORD old_protect;
   return VirtualProtect(p, bytes, PAGE_READWRITE, &old_protect) != 0;
 #else
-  const uintptr_t page = uintptr_t(sysconf(_SC_PAGESIZE));
+  // Through the SDK rather than a bare mprotect: on Linux it keeps a shadow of
+  // every protection it sets, which the fault handler consults to tell a stale
+  // write watch from a real fault, and a bare mprotect would leave that shadow
+  // describing this page as still read-only.
+  size_t query_length = bytes;
+  rex::memory::PageAccess access = rex::memory::PageAccess::kNoAccess;
+  if (rex::memory::QueryProtect(p, query_length, access) && query_length >= bytes &&
+      (access == rex::memory::PageAccess::kReadWrite ||
+       access == rex::memory::PageAccess::kExecuteReadWrite)) {
+    return true;  // Already writable - this runs every sweep, so skip the syscall.
+  }
+  const uintptr_t page = uintptr_t(rex::memory::page_size());
   const uintptr_t start = uintptr_t(p) & ~(page - 1);
   const size_t len = size_t(uintptr_t(p) + bytes - start);
-  return mprotect(reinterpret_cast<void*>(start), len, PROT_READ | PROT_WRITE) == 0;
+  return rex::memory::Protect(reinterpret_cast<void*>(start), len,
+                              rex::memory::PageAccess::kReadWrite, nullptr);
 #endif
 }
 
@@ -442,20 +454,6 @@ void PatchStaticDefaults(rex::memory::Memory* memory, uint32_t aspect_pattern,
   }
 }
 
-// Is the guest page holding this address writable, according to the SDK's own
-// page tracking? Used on POSIX in place of a host protection query - it is the
-// same source of truth the guest itself sees, and on Linux it reads the
-// in-process protection shadow rather than parsing /proc/self/maps.
-bool GuestRangeWritable(rex::memory::Memory* memory, uint32_t guest_ea) {
-  auto* heap = memory->LookupHeap(guest_ea);
-  if (!heap) {
-    return false;
-  }
-  const rex::memory::PageAccess access = heap->QueryRangeAccess(guest_ea, guest_ea + 3);
-  return access == rex::memory::PageAccess::kReadWrite ||
-         access == rex::memory::PageAccess::kExecuteReadWrite;
-}
-
 // Poke one camera's aspect field, given its guest address. Shared by both
 // platforms' sweeps: it works purely off guest EAs, so it does not care
 // whether the scan ran in place (Windows) or over a copy (POSIX).
@@ -546,38 +544,59 @@ uint32_t WidescreenSweep(rex::memory::Memory* memory, uint32_t match_a, uint32_t
     guest += len;
   }
 #else
-  // POSIX: there is no VirtualQuery, and /proc/self/maps is far too slow to
-  // parse per sweep. Instead stride the guest range in chunks read through
-  // process_vm_readv, which fails cleanly on anything unmapped - so the walk
-  // needs no protection map at all - and scan the copy. Writability comes from
-  // the SDK's own page tracking rather than the host mapping.
+  // POSIX: walk the committed regions in the guest heaps' own page tables -
+  // the direct analogue of the VirtualQuery walk above, and in-process. The
+  // host mapping cannot answer this here: the guest views are mapped
+  // read-write in full at startup and only a decommit revokes access, so a
+  // never-committed page reads as mapped - and reading one faults in fresh shm
+  // backing, which striding the whole guest range would do for gigabytes of
+  // it. Each committed region is then copied out through process_vm_readv
+  // (see SafeReadBlock) in bounded chunks and the copy scanned.
   std::vector<uint32_t> chunk(kSweepChunkBytes / 4);
+  // CameraSignatureAt reads one word behind and two ahead of a candidate, so
+  // consecutive chunks overlap by three words: a signature straddling a chunk
+  // edge is then whole in the next chunk rather than missed.
+  constexpr uint64_t kChunkOverlapBytes = 3 * sizeof(uint32_t);
   uint64_t guest = kGuestScanBegin;
   while (guest < kGuestScanEnd) {
-    const size_t want = size_t(std::min<uint64_t>(kSweepChunkBytes, kGuestScanEnd - guest));
-    const size_t got =
-        SafeReadBlock(memory->TranslateVirtual(uint32_t(guest)), chunk.data(), want);
-    if (!got) {
-      guest += want;  // nothing mapped here - stride past it
+    rex::memory::BaseHeap* heap = memory->LookupHeap(uint32_t(guest));
+    if (!heap) {
+      // Not a guest heap (0x7F000000, the GPU writeback window): hop to the
+      // next 16 MiB boundary, where the following heap starts.
+      guest = (guest | 0xFFFFFFull) + 1;
       continue;
     }
-    const size_t words = got / 4;
-    const bool writable = GuestRangeWritable(memory, uint32_t(guest));
-    for (size_t i = 1; i + 2 < words; ++i) {
-      if (!CameraSignatureAt(chunk.data(), i, words, match_a, match_b)) {
-        continue;
-      }
-      if (PokeCameraAspect(memory, uint32_t(guest + uint64_t(i) * 4), writable, to_bits,
-                           to_value)) {
-        ++patched;
-      }
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(uint32_t(guest), &info) || !info.region_size) {
+      guest = uint64_t(heap->heap_base()) + heap->heap_size();
+      continue;
     }
-    guest += got;
-    // A short read means the chunk ran into an unmapped page; step over it so
-    // the next iteration starts past the gap instead of retrying the same one.
-    if (got < want) {
-      guest += 0x1000;
+    const uint64_t region_end = std::min<uint64_t>(guest + info.region_size, kGuestScanEnd);
+    const bool readable = (info.state & rex::memory::kMemoryAllocationCommit) &&
+                          (info.protect & rex::memory::kMemoryProtectRead);
+    const bool writable = (info.protect & (rex::memory::kMemoryProtectWrite |
+                                           rex::memory::kMemoryProtectWriteCombine)) != 0;
+    uint64_t chunk_guest = guest;
+    while (readable && chunk_guest < region_end) {
+      const size_t want = size_t(std::min<uint64_t>(kSweepChunkBytes, region_end - chunk_guest));
+      const size_t got =
+          SafeReadBlock(memory->TranslateVirtual(uint32_t(chunk_guest)), chunk.data(), want);
+      const size_t words = got / 4;
+      for (size_t i = 1; i + 2 < words; ++i) {
+        if (CameraSignatureAt(chunk.data(), i, words, match_a, match_b) &&
+            PokeCameraAspect(memory, uint32_t(chunk_guest + uint64_t(i) * 4), writable, to_bits,
+                             to_value)) {
+          ++patched;
+        }
+      }
+      if (got < want || chunk_guest + want >= region_end) {
+        // Done with the region - or a page in it vanished under us (decommitted
+        // mid-sweep), in which case its remainder waits for the next sweep.
+        break;
+      }
+      chunk_guest += want - kChunkOverlapBytes;
     }
+    guest = region_end;
   }
 #endif
 
