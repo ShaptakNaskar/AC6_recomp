@@ -25,7 +25,15 @@ void GTKWindowedAppContext::NotifyUILoopOfPendingFunctions() {
   std::lock_guard<std::mutex> pending_functions_idle_pending_lock(
       pending_functions_idle_pending_mutex_);
   if (!pending_functions_idle_pending_) {
-    pending_functions_idle_pending_ = gdk_threads_add_idle(PendingFunctionsSourceFunc, this);
+    // Above GDK_PRIORITY_REDRAW. The presenter paints from this thread whenever
+    // an ImGui drawer is attached (always, here), a paint blocks on the GPU, and
+    // with a busy GPU the next redraw is ready as soon as one ends - so at the
+    // default idle priority these functions ran only in the gaps. The SDL event
+    // pump is one of them: controller input then arrived seconds late under
+    // load. Win32, where posted messages are handled ahead of WM_PAINT, never
+    // had that ordering.
+    pending_functions_idle_pending_ = gdk_threads_add_idle_full(
+        G_PRIORITY_HIGH_IDLE, PendingFunctionsSourceFunc, this, nullptr);
   }
 }
 
