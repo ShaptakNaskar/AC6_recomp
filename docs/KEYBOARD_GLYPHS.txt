@@ -1,0 +1,92 @@
+Fixed keyboard and mouse button prompts
+======================================
+
+Enable ac6_keyboard_glyphs = true in ac6recomp.toml beside the executable,
+then restart. This setting is also visible in the F4 enhancements overlay,
+but resources already loaded retain their artwork until the next launch.
+Leave it false for the original controller prompts.
+
+Replacements:
+  A  -> mouse icon with left button highlighted (Mouse1)
+  B  -> mouse icon with right button highlighted (Mouse2)
+  X  -> R
+  Y  -> T
+  LB -> Q
+  RB -> E
+
+The mouse icons deliberately match both menu confirm/cancel and the flight
+gun/missile defaults. Space and Escape still work in menus. Menu auxiliary
+actions now default to R (X), T (Y), Q (LB), E (RB). They can be configured as:
+
+  [menu]
+  x = ["R"]
+  y = ["T"]
+  page_left = ["Q"]
+  page_right = ["E"]
+
+Existing ac6_input.toml files inherit these added menu defaults when the
+entries are absent. Flight target switching accepts both Tab and T in new
+defaults, so the fixed Y icon also works in flight. If your existing bindings
+file explicitly lists only Tab, add T to [flight].switch_targets:
+
+  switch_targets = ["Tab", "T"]
+
+Scope and limitations
+---------------------
+This first pass replaces the six known standalone button textures. It does
+not change text mentioning Xbox buttons, controller diagrams, or other
+button art baked into larger images. Prompts are fixed: they do not track
+custom bindings or switch back automatically after controller input.
+
+Artwork is renderer-independent and works with both Vulkan and D3D12.
+Controls are separate: ac6_kbm_enabled enables keyboard/mouse controls.
+The Linux input path uses XInput2 through X11/Xwayland; see LINUX_INPUT.txt.
+Enabling only glyphs does not enable keyboard/mouse gameplay.
+
+Implementation decision
+-----------------------
+The existing DDS mod loader is D3D12-only. Instead of extending that loader,
+replace these small, known NTXR resources immediately after PAC decoding,
+before relocation and upload. The existing post-decode hook is already
+shared by both platforms. No new codegen hooks or SDK changes are needed.
+
+Whole-resource FNV-1a fingerprints distinguish the six exact US-disc textures
+from unrelated sprites. Unsupported textures pass through unchanged. The
+FHM walker validates offset and size tables and caps recursion at eight
+levels. The glyphs are drawn procedurally, compressed to BC3/DXT5, tiled in
+the existing Xbox layout and 16-bit byte-swapped. Metadata and resource size
+stay unchanged. Only decoded memory is modified; game archives are never
+written. The diagnostic PAC dump, if enabled, is taken before replacement.
+
+No original game artwork is included in source control. Fingerprints were
+checked against the user's archive: 189 resource occurrences across 109 UI
+containers, with save/load, main/options menus, hangar, tutorials and loading
+screens among the users of these shared icons.
+
+Validation
+----------
+Build the standalone bounds/idempotence test from the repository root:
+
+  clang++ -std=c++23 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -g -Isrc src/ac6_keyboard_glyphs.cpp tools/test_ac6_keyboard_glyphs.cpp \
+    -o /tmp/test_ac6_keyboard_glyphs
+  ASAN_OPTIONS=detect_leaks=0 /tmp/test_ac6_keyboard_glyphs
+
+Leak detection is disabled for ptrace-based sandboxes; address and undefined
+behavior checks remain enabled. Optionally append paths to user-supplied
+decoded PAC or NTXR files. The tool patches copies in memory, checks a second
+pass is a no-op, checks unmatched resources remain unchanged, and reports
+how many known textures were replaced. It never writes the supplied files.
+Add --expect=N to make the test fail if the replacement count differs from
+the expected number, for example --expect=5 for the decoded startup entry 1.
+
+Verified for this implementation: full Linux build; ASan/UBSan parser tests;
+4,286 local NTXR inputs with 189 known replacements and all nonmatches
+unchanged; six decoded glyph previews. The new --expect check was also tested
+with positive fixtures and an intentionally incorrect count. In-game layout
+and Windows input have not been tested here. keyboard_glyphs_preview.png
+shows the generated replacement artwork, not a screenshot from the game.
+
+Runtime validation: cold-launch with glyphs enabled, check confirm/cancel and
+auxiliary prompts in menus, and inspect the info-level [KBM glyphs] log lines.
+Cold-launch with glyphs disabled to compare the original controller artwork.

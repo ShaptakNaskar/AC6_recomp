@@ -69,6 +69,10 @@
 
 REXCVAR_DEFINE_BOOL(ac6_kbm_enabled, false, "AC6/Enhancements",
                     "Enable keyboard and mouse controls.");
+REXCVAR_DEFINE_BOOL(ac6_keyboard_glyphs, false, "AC6/Enhancements",
+                    "Replace known Xbox button icons with fixed default mouse "
+                    "and keyboard prompts. Requires a restart; does not follow "
+                    "custom bindings or switch back when using a controller.");
 REXCVAR_DEFINE_BOOL(ac6_kbm_log, false, "AC6/Enhancements",
                     "Log keyboard and mouse input diagnostics.")
     .debug_only();
@@ -129,10 +133,18 @@ constexpr uint32_t kOffAnalogC = 0xF58;       // 32 floats
 struct ActionDef {
   const char* name;
   int mirror_bit;
+  uint16_t xinput_buttons;
 };
 constexpr ActionDef kMenuActions[] = {
-    {"up", 0},      {"down", 1},   {"left", 2},  {"right", 3},
-    {"confirm", 5}, {"cancel", 7}, {"start", 10}, {"back", 11},
+    {"up", 0, 0x0001},      {"down", 1, 0x0002},
+    {"left", 2, 0x0004},    {"right", 3, 0x0008},
+    {"confirm", 5, 0x1000}, {"cancel", 7, 0x2000},
+    {"start", 10, 0x0010},  {"back", 11, 0x0020},
+    // Auxiliary prompts previously had no menu bindings. Inject at the
+    // device layer and let the engine derive their mirror/action bits; only
+    // the original eight mirror identities have been independently verified.
+    {"x", -1, 0x4000}, {"y", -1, 0x8000},
+    {"page_left", -1, 0x0100}, {"page_right", -1, 0x0200},
 };
 constexpr size_t kNumMenuActions = std::size(kMenuActions);
 
@@ -353,7 +365,7 @@ void SetDefaultBindings(Config& c) {
   setf("high_g", {"2"});  // AC7's "Accelerate + Decelerate" key (W+S also works)
   setf("change_view", {"V"});
   setf("switch_radar_map", {"R"});
-  setf("switch_targets", {"Tab"});
+  setf("switch_targets", {"Tab", "T"});  // T also matches the fixed Y prompt
   setf("pause", {"Escape"});
   setf("wingman_up", {"Up"});
   setf("wingman_down", {"Down"});
@@ -369,6 +381,10 @@ void SetDefaultBindings(Config& c) {
   set("cancel", {"Escape", "Backspace", "Mouse2"});  // RMB = back out
   set("start", {"Enter"});
   set("back", {"Tab"});
+  set("x", {"R"});
+  set("y", {"T"});
+  set("page_left", {"Q"});
+  set("page_right", {"E"});
 }
 
 // Written next to the exe on first run when no config exists. KEEP IN SYNC
@@ -404,6 +420,10 @@ confirm = ["Space", "Mouse1"]
 cancel  = ["Escape", "Backspace", "Mouse2"]
 start   = ["Enter"]
 back    = ["Tab"]
+x       = ["R"]
+y       = ["T"]
+page_left  = ["Q"]
+page_right = ["E"]
 
 [flight]
 pitch_down    = ["1"]
@@ -426,7 +446,7 @@ autopilot     = ["Z", "X"]
 high_g        = ["2"]
 change_view   = ["V"]
 switch_radar_map = ["R"]
-switch_targets   = ["Tab"]
+switch_targets   = ["Tab", "T"]
 pause         = ["Escape"]
 wingman_up    = ["Up"]
 wingman_down  = ["Down"]
@@ -983,12 +1003,6 @@ bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
   out_x = shape(cam_mode ? g_mouse.cam_x : g_mouse.x);
   out_y = shape(cam_mode ? g_mouse.cam_y : g_mouse.y);
   return true;
-#else
-  (void)cam_mode;
-  (void)out_x;
-  (void)out_y;
-  return false;
-#endif
 }
 
 // ---- Per-instance injection state -------------------------------------------
@@ -1035,6 +1049,7 @@ void DumpMaskTables(uint8_t* base, uint32_t singleton, uint32_t fifth) {
 uint32_t GatherMirrorBits(const GateState& gate) {
   uint32_t mirror = 0;
   for (size_t i = 0; i < kNumMenuActions; ++i) {
+    if (kMenuActions[i].mirror_bit < 0) continue;
     for (VirtualKey vk : g_config.menu_keys[i]) {
       if (KeyAllowed(gate, vk) && KeyHeld(vk)) {
         mirror |= 1u << kMenuActions[i].mirror_bit;

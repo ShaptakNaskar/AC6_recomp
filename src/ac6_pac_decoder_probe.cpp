@@ -1,6 +1,8 @@
 #include "ac6_pac_decoder_probe.h"
 #include "ac6_pac_decode_dump.h"
+#include "ac6_keyboard_glyphs.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/logging/api.h>
 #include <rex/memory.h>
@@ -22,6 +24,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+REXCVAR_DECLARE(bool, ac6_keyboard_glyphs);
 
 namespace {
 
@@ -305,6 +309,17 @@ void ac6PacDecoderDumpHook(PPCRegister& r4, PPCRegister& r10, PPCRegister& r11,
     }
 
     Ac6DumpPacDecodedEntry(entry_index, codec, csize, usize, source_offset, host);
+
+    // Patch after dumping, before the game relocates/consumes the resources.
+    // This operates on guest texture bytes, so both Vulkan and D3D12 see the
+    // same fixed artwork without enabling the texture replacement subsystem.
+    if (REXCVAR_GET(ac6_keyboard_glyphs)) {
+        auto* writable = memory->TranslateVirtual<uint8_t*>(r4.u32);
+        const size_t patched = ac6::PatchKeyboardGlyphs({writable, usize});
+        if (patched) {
+            REXLOG_INFO("[KBM glyphs] replaced {} button textures in decoded PAC buffer", patched);
+        }
+    }
 }
 
 // ============================================================================

@@ -93,6 +93,7 @@ Settings live in **`ac6recomp.toml`** next to the executable. Most can also be c
 | `ac6_cursor_hide_seconds` | `3.0` | Hide the mouse cursor after this many idle seconds. `0` = never hide |
 | `ac6_kbm_enabled` | `false` | **Enable keyboard and mouse controls.** Off by default — controllers work out of the box |
 | `ac6_kbm_config` | `ac6_input.toml` | Path to the key bindings file. Edits are picked up live |
+| `ac6_keyboard_glyphs` | `false` | Replace six shared Xbox button icons with fixed mouse/key prompts on either renderer. Restart required; see [glyph details](docs/KEYBOARD_GLYPHS.txt) |
 | `ac6_texture_swaps_enabled` | `false` | Enable texture replacement mods (see [Modding docs](#modding-docs)) |
 
 For 1440p, set both `draw_resolution_scale_x` and `draw_resolution_scale_y` to `2`. For 2160p or 4K, set them to `3`.
@@ -129,7 +130,7 @@ Bindings live in `ac6_input.toml`, created next to the executable on first run a
 | Pitch down / up | `1` / `3` | | Fire machine gun | `Mouse1`, `Left Ctrl` |
 | Roll left / right | `A` / `D` | | Fire missile | `Mouse2`, `Space` |
 | Yaw left / right | `Q` / `E` | | Change weapon | `Mouse wheel`, `C` |
-| Accelerate | `W` | | Switch targets | `Tab` |
+| Accelerate | `W` | | Switch targets | `Tab`, `T` |
 | Decelerate | `S` | | Change view | `V` |
 | High-G turn | `2` | | Radar / map | `R` |
 | Autopilot | `Z`, `X` | | Landing gear | `G` |
@@ -150,6 +151,16 @@ Bindings live in `ac6_input.toml`, created next to the executable on first run a
 | Cancel | `Escape`, `Backspace`, `Mouse2` |
 | Start | `Enter` |
 | Back | `Tab` |
+| Auxiliary X / Y actions | `R` / `T` |
+| Previous / next page (LB / RB) | `Q` / `E` |
+
+Set `ac6_keyboard_glyphs = true` and restart for fixed prompt artwork: A/B
+become left/right mouse icons, and X/Y/LB/RB become R/T/Q/E keycaps. These
+icons do not follow custom bindings or switch automatically with controllers.
+For an existing bindings file, add `T` to `[flight].switch_targets` so that
+the fixed Y prompt also matches target switching in flight.
+
+![Fixed default mouse and keyboard prompt artwork](docs/keyboard_glyphs_preview.png)
 
 ---
 
