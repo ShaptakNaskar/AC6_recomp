@@ -10903,3 +10903,25 @@ registers = ["r31"]
 address = 0x8222B81C
 name = "ac6PlayerDamageExitHook"
 registers = ["r31"]
+
+[[midasm_hook]]
+address = 0x8214D0D8
+name = "ac6UnlimitedCreditsHook"
+registers = ["r8", "r9"]
+
+[[midasm_hook]]
+address = 0x8222CABC
+name = "ac6RapidFireMissileHook"
+registers = ["f0"]
+
+
+# Single-launch special weapons (ADMM): second decrement path.
+[[midasm_hook]]
+address = 0x822316A8
+name = "ac6InfiniteSpecialHook"
+registers = ["r9"]
+
+[[midasm_hook]]
+address = 0x82232288
+name = "ac6RapidFireSpecialHook"
+registers = ["f13"]
