@@ -13,6 +13,7 @@
 #include <rex/graphics/vulkan/graphics_system.h>
 #endif
 
+#include "ac6_backend_fixes/ac6_mem_scanner.h"
 #include "ac6_native_graphics.h"
 #include "ac6_native_graphics_overlay.h"
 #include "render_hooks.h"
@@ -87,6 +88,9 @@ class Ac6recompApp : public rex::ReXApp {
         });
         REXLOG_INFO("Ac6recompApp: Native frame boundary callback registered");
     }
+
+    // Reverse-engineering aid; does nothing unless ac6_dev_scanner is set.
+    ac6::devtools::StartMemScanner(runtime()->memory());
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
