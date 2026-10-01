@@ -10875,3 +10875,16 @@ registers = ["r5"]
 address = 0x821C5A78
 name = "ac6StorageOrderHookVar"
 registers = ["r5", "r29"]
+
+# Single-player cheats (src/ac6_backend_fixes/ac6_cheats.cpp). Each sits on
+# the store of a decremented ammunition counter and undoes the decrement
+# while its cheat cvar is on.
+[[midasm_hook]]
+address = 0x8222CAE4
+name = "ac6InfiniteMissilesHook"
+registers = ["r10"]
+
+[[midasm_hook]]
+address = 0x82231DC8
+name = "ac6InfiniteSpecialHook"
+registers = ["r7"]

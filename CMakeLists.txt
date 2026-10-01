@@ -46,6 +46,7 @@ set(AC6RECOMP_SOURCES
     src/ac6_backend_fixes/ac6_fullres_effects.cpp
     src/ac6_backend_fixes/ac6_kbm_input.cpp
     src/ac6_backend_fixes/ac6_mem_scanner.cpp
+    src/ac6_backend_fixes/ac6_cheats.cpp
     src/ac6_backend_fixes/ac6_storage_submit_order_fix.cpp
     src/ac6_backend_fixes/ac6_widescreen.cpp
 )
