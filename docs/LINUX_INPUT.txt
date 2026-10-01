@@ -1,0 +1,81 @@
+Linux keyboard and mouse controls
+=================================
+
+Set ac6_kbm_enabled = true in ac6recomp.toml beside the executable and
+restart. ac6_input.toml contains the same menu/flight/mouse settings used
+on Windows. ac6_kbm_config sets its path; relative paths use the working
+directory. Missing files are created with defaults when controls initialize.
+
+Mouse moves steer the aircraft. Mouse1 fires the machine gun / confirms
+in menus; Mouse2 fires missiles / cancels. Wheel up/down changes weapons.
+Hold Left Alt to look around instead of steering. W/S accelerate/brake,
+A/D roll, Q/E yaw, Tab or T switches targets, and Escape pauses.
+Sensitivity, inversion, smoothing, deadzone and velocity/position steering
+models remain configurable in the [mouse] section.
+
+Menu mouse buttons operate confirm/cancel. Hover-based selection and
+clicking arbitrary menu items are not implemented.
+
+Platform and design
+-------------------
+The GTK presenter already selects X11, including Xwayland on a Wayland
+desktop. The adapter uses libXi and requires XInput 2.1 or later. Native
+Wayland input is outside this path. Install libxi-dev (Ubuntu), libXi-devel
+(Fedora) or libxi (Arch) when building.
+
+An XInput2 filter observes raw key/button/wheel/motion events without
+consuming them, so SDK hotkeys and ImGui still receive their own input.
+Left/right modifiers, five mouse buttons and wheel directions feed the
+existing virtual-key bindings. Mouse deltas use the desktop's pointer
+acceleration, like the Windows cursor path, so the same [mouse] settings
+feel alike on both. While steering, the hidden cursor is pinned to the
+window centre, so windowed play cannot lose the pointer. Keys use
+the primary keyboard layout group; shifted number-row symbols also map
+to their digit keys so default 1/2/3 bindings work on layouts like AZERTY.
+The adapter reuses GDK's negotiated XI version and opcode; it never issues
+a second version negotiation on the shared display connection.
+
+Mouse capture/hiding and GTK/Xlib operations run only on the UI thread.
+Guest input polls exchange keys and accumulated deltas through a mutex.
+The pointer grab has a 100 ms lease refreshed by flight polling; pauses,
+focus loss, interactive overlay ownership, disable and shutdown release
+it. The previous pointer position is restored on a normal release, but
+never moved in another application after focus loss. State transitions
+discard old keys, wheel pulses and deltas before gameplay resumes.
+The UI timer retires native grabs invalidated by a shared-state reset,
+even when overlay ownership changes twice before the next tick.
+
+The SDK's mnk_mode mapper stays disabled while AC6 controls are enabled,
+preventing two different keyboard mappers from controlling the same pad.
+The Windows polling path and steering calculations are retained.
+Free-cursor idle hiding remains a Windows feature; Linux hides the cursor
+only while steering owns it.
+
+Validation
+----------
+Pure shared-state test:
+
+  clang++ -std=c++23 -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -g -Isrc tools/test_ac6_host_input.cpp -o /tmp/test_ac6_host_input
+  ASAN_OPTIONS=detect_leaks=0 /tmp/test_ac6_host_input
+
+Native integration test (requires libXtst development files and Xvfb):
+
+  cmake --build --preset linux-amd64-relwithdebinfo \
+    --target ac6_linux_input_test
+  xvfb-run -a -s '-screen 0 800x600x24 -nolisten tcp' \
+    out/build/linux-amd64-relwithdebinfo/ac6_linux_input_test
+
+The integration target is excluded from normal builds and is created when
+pkg-config finds xtst. It checks XTest/XInput2 key, button, wheel and relative
+motion events, pointer capture, rapid overlay reset, focus loss/regain,
+and disabling controls, in a separate test window with no game assets.
+
+The full Linux build and ASan/UBSan shared-state checks passed here. Native
+test compilation passed, but execution could not start because the sandbox
+does not allow the X11 server to bind its sockets. In-game feel, Xwayland
+capture behavior, and native input events need validation on a desktop.
+
+GDK's filter contract guarantees GenericEvent cookie data is already loaded
+and owned by GDK; the adapter reads it without freeing it:
+https://docs.gtk.org/gdk3/method.Window.add_filter.html

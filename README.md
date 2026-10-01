@@ -157,6 +157,8 @@ Bindings live in `ac6_input.toml`, created next to the executable on first run a
 Set `ac6_keyboard_glyphs = true` and restart for fixed prompt artwork: A/B
 become left/right mouse icons, and X/Y/LB/RB become R/T/Q/E keycaps. These
 icons do not follow custom bindings or switch automatically with controllers.
+Linux mouse/keyboard controls use XInput2 through X11/Xwayland. Enable
+`ac6_kbm_enabled` for mouse steering, buttons/wheel, and keyboard bindings.
 For an existing bindings file, add `T` to `[flight].switch_targets` so that
 the fixed Y prompt also matches target switching in flight.
 
@@ -199,9 +201,9 @@ The Linux build uses the Vulkan renderer. You need Clang 18 or newer, CMake 3.25
 
 | Distribution | Build dependencies |
 |---|---|
-| Arch, CachyOS | `sudo pacman -S --needed clang cmake ninja pkgconf gtk3 libx11 alsa-lib libpulse pipewire` |
-| Ubuntu 24.04+ | `sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libx11-xcb-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev` |
-| Fedora | `sudo dnf install clang cmake ninja-build pkgconf-pkg-config gtk3-devel libX11-devel alsa-lib-devel pulseaudio-libs-devel pipewire-devel systemd-devel` |
+| Arch, CachyOS | `sudo pacman -S --needed clang cmake ninja pkgconf gtk3 libx11 libxi alsa-lib libpulse pipewire` |
+| Ubuntu 24.04+ | `sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev libx11-xcb-dev libxi-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev` |
+| Fedora | `sudo dnf install clang cmake ninja-build pkgconf-pkg-config gtk3-devel libX11-devel libXi-devel alsa-lib-devel pulseaudio-libs-devel pipewire-devel systemd-devel` |
 
 **Build.** Point the script at your extracted game folder (the one holding `default.xex`), or put the `.iso` in the repository root and install [extract-xiso](https://github.com/XboxDev/extract-xiso):
 
@@ -216,7 +218,8 @@ The manual equivalent is the four commands from Option B with the `linux-amd64-r
 - Saves live in `~/.local/share/ac6recomp`. The pipeline cache is written to `cache/` in the working directory, so start the game from the same folder each time.
 - On Wayland the window opens through XWayland automatically.
 - On laptops with two GPUs, if the wrong one is picked, choose it with `--vulkan_device=N`, where `N` is its position in `vulkaninfo --summary` (counting from 0).
-- Not yet available on Linux: keyboard and mouse controls, and texture replacement.
+- Mouse/keyboard controls use X11/Xwayland and require XInput 2.1 or later; see [input details](docs/LINUX_INPUT.txt).
+- Texture replacement mods are not yet available on Linux; built-in keyboard glyphs work on either renderer.
 
 ---
 

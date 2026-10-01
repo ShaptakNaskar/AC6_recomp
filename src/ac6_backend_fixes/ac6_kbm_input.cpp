@@ -56,6 +56,7 @@
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
+#include "../ac6_linux_input.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -678,12 +679,18 @@ GateState QueryGate() {
   }
   NoteFocusForKeyTrust(g.fg_ok);
 #else
-  g.fg_ok = true;
+  g.fg_ok = ac6::LinuxInputFocused();
 #endif
   g.capture_mouse = rex::ui::ImGuiDrawer::DialogsCaptureMouse();
   g.capture_keyboard = rex::ui::ImGuiDrawer::DialogsCaptureKeyboard();
   g.want_text = rex::ui::ImGuiDrawer::DialogsWantTextInput();
   g.steer_owns_pointer = g_mouse.capturing;
+#if !defined(_WIN32)
+  // Release the pointer as soon as an interactive overlay owns either input
+  // kind. This lets F4 work while flying without a click through the game.
+  ac6::SetLinuxInputOverlay(g.capture_mouse || g.capture_keyboard || g.want_text);
+  g.steer_owns_pointer = ac6::LinuxMouseCaptured();
+#endif
   return g;
 }
 
@@ -708,13 +715,15 @@ bool KeyAllowed(const GateState& gate, VirtualKey vk) {
 }
 
 bool KeyHeld(VirtualKey vk) {
+#if !defined(_WIN32)
+  return ac6::LinuxKeyHeld(static_cast<unsigned>(vk));
+#else
   if (vk == kVkWheelUp) {
     return NowMs() < g_wheel_up_until.load(std::memory_order_relaxed);
   }
   if (vk == kVkWheelDown) {
     return NowMs() < g_wheel_down_until.load(std::memory_order_relaxed);
   }
-#if defined(_WIN32)
   const bool down = (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0;
   std::atomic<uint8_t>& trust = g_key_trust[static_cast<int>(vk) & 0xFF];
   if (!down) {
@@ -734,9 +743,6 @@ bool KeyHeld(VirtualKey vk) {
                        g_focus_seen.load(std::memory_order_relaxed) ? "across focus gain"
                                                                     : "at startup"));
   }
-  return false;
-#else
-  (void)vk;
   return false;
 #endif
 }
@@ -888,6 +894,8 @@ void MouseSteerRelease() {
   g_mouse.cam_x = g_mouse.cam_y = 0.0;
 #if defined(_WIN32)
   SetCursorHidden(false, nullptr);
+#else
+  ac6::RequestLinuxMouseCapture(false);
 #endif
 }
 
@@ -897,12 +905,12 @@ void MouseSteerRelease() {
 // HOLDS while the mouse rests (the camera stays where you put it), and
 // resets to neutral when the key is released.
 bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
-#if defined(_WIN32)
   const MouseConfig& mc = g_config.mouse;
   if (mc.mode != "steer") {
     MouseSteerRelease();
     return false;
   }
+#if defined(_WIN32)
   HWND fg = GetForegroundWindow();
   if (!fg) {
     MouseSteerRelease();
@@ -918,14 +926,26 @@ bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
 
   POINT cur;
   GetCursorPos(&cur);
+  double dx_px = static_cast<double>(cur.x - center.x);
+  double dy_px = static_cast<double>(cur.y - center.y);
+#else
+  ac6::RequestLinuxMouseCapture(true);
+  double dx_px = 0, dy_px = 0;
+  if (!ac6::TakeLinuxMouseMotion(dx_px, dy_px)) {
+    // Capture happens asynchronously on the UI thread. Keep the request
+    // alive while waiting, but never reuse steering from an earlier session.
+    g_mouse.capturing = false;
+    g_mouse.x = g_mouse.y = g_mouse.rate_x = g_mouse.rate_y = 0;
+    g_mouse.cam_x = g_mouse.cam_y = 0;
+    return false;
+  }
+#endif
   const int64_t now = NowMs();
   if (g_mouse.capturing && now - g_mouse.last_ms > 250) {
     g_mouse.capturing = false;  // stale anchor (gate was closed) - re-anchor
   }
   if (g_mouse.capturing) {
     const double dt = std::max(0.001, std::min(0.1, (now - g_mouse.last_ms) / 1000.0));
-    double dx_px = static_cast<double>(cur.x - center.x);
-    double dy_px = static_cast<double>(cur.y - center.y);
     if (mc.invert_x) dx_px = -dx_px;
     if (mc.invert_y) dy_px = -dy_px;
 
@@ -986,8 +1006,10 @@ bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
     g_mouse.cam_x = g_mouse.cam_y = 0.0;
   }
   g_mouse.last_ms = now;
+#if defined(_WIN32)
   SetCursorPos(center.x, center.y);
   SetCursorHidden(true, fg);
+#endif
 
   auto shape = [&](double v) {
     double a = std::abs(v);
@@ -1213,21 +1235,11 @@ PPC_EXTERN_FUNC(__imp__rex_sub_82390CE0);  // guest XamInputGetState(user,0,stat
 // downstream layer then sees keyboard presses exactly as pad presses.
 // (Flight/M2 will gate this by game mode so flight keys never collide.)
 uint32_t GatherXInputBits(const GateState& gate) {
-  static const uint16_t kXBits[kNumMenuActions] = {
-      0x0001,  // up      -> DPAD_UP
-      0x0002,  // down    -> DPAD_DOWN
-      0x0004,  // left    -> DPAD_LEFT
-      0x0008,  // right   -> DPAD_RIGHT
-      0x1000,  // confirm -> A
-      0x2000,  // cancel  -> B
-      0x0010,  // start   -> START
-      0x0020,  // back    -> BACK
-  };
   uint32_t bits = 0;
   for (size_t i = 0; i < kNumMenuActions; ++i) {
     for (VirtualKey vk : g_config.menu_keys[i]) {
       if (KeyAllowed(gate, vk) && KeyHeld(vk)) {
-        bits |= kXBits[i];
+        bits |= kMenuActions[i].xinput_buttons;
         break;
       }
     }
@@ -1248,6 +1260,7 @@ PPC_FUNC_IMPL(rex_sub_82390CE0) {
   // the timeout too.
   if (user == 0) {
     CursorIdleHideTick();
+    if (!REXCVAR_GET(ac6_kbm_enabled)) MouseSteerRelease();
   }
 
   // Pad-less operation: when no controller is connected (0x48F), present a

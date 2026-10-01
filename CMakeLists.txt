@@ -56,6 +56,8 @@ set(AC6RECOMP_SOURCES
 # built on non-Windows hosts, so the translation unit would have no callers there.
 if(WIN32)
     list(APPEND AC6RECOMP_SOURCES src/ac6_texture_overrides.cpp)
+else()
+    list(APPEND AC6RECOMP_SOURCES src/ac6_linux_input.cpp)
 endif()
 
 if(WIN32)
@@ -65,6 +67,21 @@ else()
 endif()
 
 rexglue_setup_target(ac6recomp)
+
+if(NOT WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(AC6_HOST_INPUT REQUIRED IMPORTED_TARGET gtk+-3.0 xi x11)
+    target_link_libraries(ac6recomp PRIVATE PkgConfig::AC6_HOST_INPUT)
+    # Optional headless native-input verification, excluded from normal builds.
+    pkg_check_modules(AC6_XTEST QUIET IMPORTED_TARGET xtst)
+    if(AC6_XTEST_FOUND)
+        add_executable(ac6_linux_input_test EXCLUDE_FROM_ALL
+            tools/test_ac6_linux_input.cpp src/ac6_linux_input.cpp)
+        target_include_directories(ac6_linux_input_test PRIVATE src)
+        target_link_libraries(ac6_linux_input_test PRIVATE
+            rexcore PkgConfig::AC6_HOST_INPUT PkgConfig::AC6_XTEST)
+    endif()
+endif()
 
 # The SDK's xmemory.cpp reads cvars owned by graphics/flags.cpp while rexgraphics
 # already links rexsystem, so the two static archives are mutually dependent.

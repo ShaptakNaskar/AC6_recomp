@@ -6,6 +6,10 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
+#if !defined(_WIN32)
+#include <native/ui/window_gtk.h>
+#include "ac6_linux_input.h"
+#endif
 #if REX_HAS_D3D12
 #include <rex/graphics/d3d12/graphics_system.h>
 #endif
@@ -42,6 +46,12 @@ class Ac6recompApp : public rex::ReXApp {
   }
 
  protected:
+#if !defined(_WIN32)
+  void OnShutdown() override {
+    ac6::StopLinuxInput();
+    rex::ReXApp::OnShutdown();
+  }
+#endif
   // Ace Combat 6 title id: selects the right .iso when several are present
   // and rejects wrong/corrupt images with a clear message.
   uint32_t OnGetExpectedTitleId() const override { return 0x4E4D07D1; }
@@ -94,6 +104,10 @@ class Ac6recompApp : public rex::ReXApp {
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+#if !defined(_WIN32)
+    if (auto* gtk_window = dynamic_cast<rex::ui::GTKWindow*>(window()))
+      ac6::StartLinuxInput(gtk_window->window());
+#endif
     REXLOG_INFO("Ac6recompApp::OnCreateDialogs");
     native_graphics_status_dialog_ =
         std::make_unique<ac6::graphics::NativeGraphicsStatusDialog>(drawer);
@@ -114,4 +128,3 @@ class Ac6recompApp : public rex::ReXApp {
  private:
   std::unique_ptr<ac6::graphics::NativeGraphicsStatusDialog> native_graphics_status_dialog_;
 };
-
