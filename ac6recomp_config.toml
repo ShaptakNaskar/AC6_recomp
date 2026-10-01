@@ -10888,3 +10888,18 @@ registers = ["r10"]
 address = 0x82231DC8
 name = "ac6InfiniteSpecialHook"
 registers = ["r7"]
+
+[[midasm_hook]]
+address = 0x8229C024
+name = "ac6NoDamageHook"
+registers = ["r31", "f28"]
+
+[[midasm_hook]]
+address = 0x8222B818
+name = "ac6PlayerDamageEnterHook"
+registers = ["r31"]
+
+[[midasm_hook]]
+address = 0x8222B81C
+name = "ac6PlayerDamageExitHook"
+registers = ["r31"]
