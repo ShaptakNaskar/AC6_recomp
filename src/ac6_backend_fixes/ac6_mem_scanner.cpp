@@ -20,6 +20,7 @@
 //   poke <type> <addr> <value>                 write once
 //   freeze <type> <addr> <value>               rewrite every 50 ms
 //   unfreeze <addr>|all
+//   ortho <addr> [bytes]                       find rotation matrices
 //
 // Reads go through process_vm_readv (ReadProcessMemory on Windows), so a page
 // that is decommitted mid-scan fails the read instead of faulting, and only
@@ -378,6 +379,45 @@ class Scanner {
     Print(fmt::format("ptrto {:08X} range 0x{:X}: {} hit(s) shown", target, range, found));
   }
 
+  // Rotation matrices in [address, address + bytes): three unit-length,
+  // mutually orthogonal float rows, packed (stride 12) or padded to vec4
+  // (stride 16). Axis-aligned ones (all entries 0 or +-1) are skipped: they
+  // are mostly identity defaults rather than a live orientation.
+  void Ortho(uint32_t address, uint32_t bytes) {
+    std::vector<uint8_t> data(bytes);
+    const size_t got = SafeRead(memory_->TranslateVirtual(address), data.data(), bytes);
+    auto f = [&](size_t at) { return float(Decode(ValueType::kF32, data.data() + at)); };
+    size_t found = 0;
+    for (size_t at = 0; at + 48 <= got && found < 100; at += 4) {
+      for (size_t stride : {size_t(12), size_t(16)}) {
+        if (at + 2 * stride + 12 > got) continue;
+        float m[3][3];
+        bool unit = true, trivial = true;
+        for (int r = 0; r < 3; ++r) {
+          for (int c = 0; c < 3; ++c) {
+            m[r][c] = f(at + r * stride + c * 4);
+            const float v = std::fabs(m[r][c]);
+            if (!(v < 1.001f)) unit = false;
+            if (v > 1e-4f && std::fabs(v - 1.0f) > 1e-4f) trivial = false;
+          }
+          const float len = m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2];
+          if (std::fabs(len - 1.0f) > 2e-3f) unit = false;
+        }
+        if (!unit || trivial) continue;
+        auto dot = [&](int i, int j) {
+          return std::fabs(m[i][0] * m[j][0] + m[i][1] * m[j][1] + m[i][2] * m[j][2]);
+        };
+        if (dot(0, 1) > 2e-3f || dot(0, 2) > 2e-3f || dot(1, 2) > 2e-3f) continue;
+        ++found;
+        Print(fmt::format("  {:08X} (+0x{:X}) stride {}: [{:.3f} {:.3f} {:.3f}] [{:.3f} {:.3f} "
+                          "{:.3f}] [{:.3f} {:.3f} {:.3f}]",
+                          uint32_t(address + at), at, stride, m[0][0], m[0][1], m[0][2], m[1][0],
+                          m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]));
+      }
+    }
+    Print(fmt::format("ortho {:08X} +0x{:X}: {} matrix(es)", address, bytes, found));
+  }
+
   bool Writable(uint32_t address, size_t size) {
     rex::memory::BaseHeap* heap = memory_->LookupHeap(address);
     if (!heap) {
@@ -429,6 +469,8 @@ class Scanner {
       Peek(uint32_t(a), args.size() >= 3 && ParseNumber(args[2], &b) ? uint32_t(b) : 16);
     } else if (cmd == "ptrto" && args.size() >= 2 && ParseNumber(args[1], &a)) {
       PointersTo(uint32_t(a), args.size() >= 3 && ParseNumber(args[2], &b) ? uint32_t(b) : 0x400);
+    } else if (cmd == "ortho" && args.size() >= 2 && ParseNumber(args[1], &a)) {
+      Ortho(uint32_t(a), args.size() >= 3 && ParseNumber(args[2], &b) ? uint32_t(b) : 0x4000);
     } else if ((cmd == "poke" || cmd == "freeze") && args.size() >= 4 &&
                ParseType(args[1], &type) && ParseNumber(args[2], &a) && ParseNumber(args[3], &b)) {
       const uint32_t address = uint32_t(a);
