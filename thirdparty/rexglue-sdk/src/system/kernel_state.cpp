@@ -846,17 +846,21 @@ void KernelState::CompleteOverlapped(uint32_t overlapped_ptr, X_RESULT result) {
 void KernelState::CompleteOverlappedEx(uint32_t overlapped_ptr, X_RESULT result,
                                        uint32_t extended_error, uint32_t length) {
   auto ptr = memory()->TranslateVirtual(overlapped_ptr);
-  XOverlappedSetResult(ptr, result);
-  XOverlappedSetExtendedError(ptr, extended_error);
-  XOverlappedSetLength(ptr, length);
-  // Read everything else still needed from the XOVERLAPPED before setting the
-  // event: the thread waiting on it may free or reuse the structure the moment
-  // it is released, and a completion routine read after that is whatever the
+  // Read everything still needed from the XOVERLAPPED before publishing the
+  // result or setting the event: a title that polls the result field, or the
+  // thread waiting on the event, may free or reuse the structure the moment
+  // either changes, and a completion routine read after that is whatever the
   // title put there next - queued as an APC to a garbage address (0xFEFEFEFE
   // in practice, which DeliverAPCs then refuses).
   const X_HANDLE event_handle = XOverlappedGetEvent(ptr);
   const uint32_t completion_routine = XOverlappedGetCompletionRoutine(ptr);
   const X_HANDLE thread_handle = completion_routine ? XOverlappedGetContext(ptr) : 0;
+  XOverlappedSetExtendedError(ptr, extended_error);
+  XOverlappedSetLength(ptr, length);
+  // The result leaves X_ERROR_IO_PENDING last, so a poller that sees it also
+  // sees the length and extended error.
+  std::atomic_thread_fence(std::memory_order_release);
+  XOverlappedSetResult(ptr, result);
   if (event_handle) {
     auto ev = object_table()->LookupObject<XEvent>(event_handle);
     if (!ev) {
