@@ -10925,3 +10925,9 @@ registers = ["r9"]
 address = 0x82232288
 name = "ac6RapidFireSpecialHook"
 registers = ["f13"]
+
+# Mouse aim: entry of the player aircraft's per-frame update, r3 = this.
+[[midasm_hook]]
+address = 0x82233FB0
+name = "ac6PlayerUpdateHook"
+registers = ["r3"]

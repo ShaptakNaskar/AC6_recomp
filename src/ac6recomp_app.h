@@ -6,6 +6,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
+#include "ac6_backend_fixes/ac6_mouse_aim.h"
 #if !defined(_WIN32)
 #include <native/ui/window_gtk.h>
 #include "ac6_linux_input.h"
@@ -109,6 +110,7 @@ class Ac6recompApp : public rex::ReXApp {
       ac6::StartLinuxInput(gtk_window->window());
 #endif
     REXLOG_INFO("Ac6recompApp::OnCreateDialogs");
+    ac6::mouse_aim::CreateReticle(drawer);
     native_graphics_status_dialog_ =
         std::make_unique<ac6::graphics::NativeGraphicsStatusDialog>(drawer);
     native_graphics_status_dialog_->Show();

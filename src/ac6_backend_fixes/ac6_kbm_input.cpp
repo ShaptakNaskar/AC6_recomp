@@ -57,6 +57,7 @@
 #include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
 #include "../ac6_linux_input.h"
+#include "ac6_mouse_aim.h"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -400,6 +401,11 @@ mode = "steer"
 # self-centers the moment the mouse stops (AC7/ACAH feel).
 # steer_model "position": mouse displacement sets and HOLDS the stick;
 # recenter (full deflections/second, 0 = never) eases it back to center.
+# steer_model "vector": virtual joystick - the mouse moves an on-screen
+# pointer, its offset from the centre is the stick, and it stays where you
+# leave it (Elite Dangerous / AC7 style).
+# steer_model "aim": point and fly - the mouse moves a reticle and the
+# aircraft steers itself onto it (War Thunder style).
 steer_model = "velocity"
 sensitivity_x = 1.5
 sensitivity_y = 1.5
@@ -888,6 +894,7 @@ void CursorIdleHideTick() {}
 // into a clamped stick position with config-driven feel. Keyboard pitch/roll
 // overrides its axis.
 void MouseSteerRelease() {
+  ac6::mouse_aim::Reset();
   g_mouse.capturing = false;
   g_mouse.x = g_mouse.y = 0.0;
   g_mouse.rate_x = g_mouse.rate_y = 0.0;
@@ -960,6 +967,26 @@ bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
       // Freeze the steering models while panning so releasing the camera key
       // never produces a stale steering kick.
       g_mouse.rate_x = g_mouse.rate_y = 0.0;
+    } else if (mc.steer_model == "aim") {
+      // Point-and-fly: the mouse moves a reticle and the aircraft steers
+      // itself onto it (ac6_mouse_aim.cpp).
+      if (!ac6::mouse_aim::Steer(dx_px * mc.sensitivity_x, dy_px * mc.sensitivity_y, g_mouse.x,
+                                 g_mouse.y)) {
+        g_mouse.x = g_mouse.y = 0.0;
+      }
+      g_mouse.rate_x = g_mouse.rate_y = 0.0;
+    } else if (mc.steer_model == "vector") {
+      // Virtual joystick (Elite Dangerous / AC7 style): the mouse moves an
+      // on-screen pointer whose offset from the centre is the stick, held
+      // where it is left. Round range; never recentres.
+      g_mouse.x += dx_px * mc.sensitivity_x / 500.0;
+      g_mouse.y += dy_px * mc.sensitivity_y / 500.0;  // positive = pull
+      const double len = std::hypot(g_mouse.x, g_mouse.y);
+      if (len > 1.0) {
+        g_mouse.x /= len;
+        g_mouse.y /= len;
+      }
+      ac6::mouse_aim::ShowStick(g_mouse.x, g_mouse.y);
     } else if (mc.steer_model == "position") {
       const double dx = dx_px * mc.sensitivity_x / 500.0;
       const double dy = dy_px * mc.sensitivity_y / 500.0;
@@ -1022,6 +1049,29 @@ bool MouseSteerPoll(bool cam_mode, double& out_x, double& out_y) {
     if (a > 1.0) a = 1.0;
     return v < 0 ? -a : a;
   };
+  if (!cam_mode && mc.steer_model == "vector") {
+    // Round deadzone first, so a pointer left near the centre flies straight
+    // (it never recentres by itself), then the usual anti-deadzone along the
+    // pointer's direction.
+    const double len = std::hypot(g_mouse.x, g_mouse.y);
+    if (len <= ac6::mouse_aim::kStickDeadzone) {
+      out_x = out_y = 0.0;
+      return true;
+    }
+    double a = (len - ac6::mouse_aim::kStickDeadzone) / (1.0 - ac6::mouse_aim::kStickDeadzone);
+    if (mc.curve_exponent != 1.0) a = std::pow(a, mc.curve_exponent);
+    if (mc.anti_deadzone > 0.0) a = mc.anti_deadzone + a * (1.0 - mc.anti_deadzone);
+    a = std::min(a, 1.0);
+    out_x = g_mouse.x / len * a;
+    out_y = g_mouse.y / len * a;
+    return true;
+  }
+  if (!cam_mode && mc.steer_model == "aim") {
+    // Already a closed-loop stick command: shaping would make it overshoot.
+    out_x = g_mouse.x;
+    out_y = g_mouse.y;
+    return true;
+  }
   out_x = shape(cam_mode ? g_mouse.cam_x : g_mouse.x);
   out_y = shape(cam_mode ? g_mouse.cam_y : g_mouse.y);
   return true;
